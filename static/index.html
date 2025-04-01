@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>三国人物关系图</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .controls {
+            padding: 15px;
+            background: rgba(245, 245, 245, 0.9);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            position: relative;
+            z-index: 2;
+        }
+
+        #graph {
+            flex: 1;
+            background: #fafafa;
+        }
+
+        .node {
+            fill: #2196F3;
+            stroke: #1565C0;
+            stroke-width: 2px;
+            cursor: grab;
+        }
+
+        .node:active {
+            cursor: grabbing;
+        }
+
+        .link {
+            stroke: #666;
+            stroke-width: 2;
+        }
+
+        .tooltip {
+            position: absolute;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+        }
+
+        .zoom-controls {
+            position: fixed;
+            top: 280px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 8px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            z-index: 2;
+        }
+
+        .zoom-button {
+            display: block;
+            width: 32px;
+            height: 32px;
+            margin: 4px;
+            border: none;
+            border-radius: 50%;
+            background: #2196F3;
+            color: white;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+
+        .zoom-button:hover {
+            background: #1976D2;
+            transform: scale(1.1);
+        }
+
+        .node-text {
+            font-size: 14px;
+            fill: #fafafa;
+            pointer-events: none;
+            text-shadow: 0 1px 2px white;
+        }
+        .link-text {
+            font-size: 12px;
+            fill: #e91e63;
+            font-weight: 500;
+            text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+            pointer-events: none;
+        }
+
+        .link-text-bg {
+            fill: rgba(255,255,255,0.9);
+            stroke: #eeeeee;
+            stroke-width: 1;
+        }
+        .main-title {
+    text-align: center;
+    font-size: 2.5rem;
+    color: #2c3e50;
+    margin: 20px 0;
+    padding: 15px 0;
+    font-family: 'SimSun', serif; /* 使用宋体更符合古典风格 */
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+    position: relative;
+}
+
+/* 添加装饰性横线 */
+.main-title::before,
+.main-title::after {
+    content: '';
+    position: absolute;
+    width: 30%;
+    height: 2px;
+    background: #c0392b;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.main-title::before {
+    left: 0;
+}
+
+.main-title::after {
+    right: 0;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .main-title {
+        font-size: 1.8rem;
+        padding: 10px 15px;
+    }
+
+    .main-title::before,
+    .main-title::after {
+        width: 20%;
+    }
+}
+/* 根据关系类型设置连线颜色 */
+.link[data-type="son"] {
+    stroke: #e74c3c;
+}
+
+.link[data-type="younger_sworn_brother"] {
+    stroke: #3498db;
+}
+
+.link[data-type="elder_sworn_brother"] {
+    stroke: #2ecc71;
+}
+    </style>
+</head>
+<body>
+    <h1 class="main-title">三国演义人物关系分析</h1>
+
+    <div class="container">
+        <div class="controls">
+            <input type="text" id="search" placeholder="输入人物名称" style="padding: 8px; margin-right: 10px;">
+            <select id="relationType" style="padding: 8px; margin-right: 10px;">
+                <option value="all">所有关系</option>
+                <option value="义弟">义弟</option>
+                <option value="义兄">义兄</option>
+                <option value="儿子">儿子</option>
+                <option value="朋友">朋友</option>
+            </select>
+            <!-- 度数选择器 -->
+            <select id="relationDepth" style="margin-right:10px;">
+                <option value="1">1度关系</option>
+                <option value="2">2度关系</option>
+                <option value="3">3度关系</option>
+            </select>
+            <button onclick="loadData()" style="padding: 8px 16px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer;">搜索</button>
+        </div>
+        <div class="zoom-controls">
+            <button class="zoom-button" onclick="zoomIn()">+</button>
+            <button class="zoom-button" onclick="zoomOut()">-</button>
+            <button class="zoom-button" onclick="resetZoom()">↺</button>
+        </div>
+        <svg id="graph"></svg>
+    </div>
+
+    <script>
+        let width = window.innerWidth;
+        let height = window.innerHeight - 120;
+        let svg, simulation, zoom, transform;
+        let tooltip = d3.select("body").append("div")
+            .attr("class", "tooltip")
+            .style("opacity", 0);
+
+        // 初始化画布
+        function initSVG() {
+            svg = d3.select("#graph")
+                .attr("width", width)
+                .attr("height", height);
+
+            // 添加缩放层容器
+            const zoomLayer = svg.append("g")
+                .attr("class", "zoom-layer");
+
+            // 定义箭头标记（放在缩放层外部）
+            svg.append("defs").append("marker")
+                .attr("id", "arrow")
+                .attr("viewBox", "0 -5 10 10")
+                .attr("refX", 32)
+                .attr("refY", 0)
+                .attr("markerWidth", 8)
+                .attr("markerHeight", 8)
+                .attr("orient", "auto")
+                .append("path")
+                .attr("d", "M0,-5L10,0L0,5")
+                .attr("fill", "#666");
+
+            // 配置缩放行为
+            zoom = d3.zoom()
+                .scaleExtent([0.5, 5])
+                .on("zoom", (event) => {
+                    transform = event.transform;
+                    zoomLayer.attr("transform", transform);
+                });
+
+            svg.call(zoom)
+                .call(zoom.transform, d3.zoomIdentity);
+        }
+
+        // 缩放控制函数
+        function zoomIn() {
+            svg.transition().duration(300).call(zoom.scaleBy, 1.2);
+        }
+
+        function zoomOut() {
+            svg.transition().duration(300).call(zoom.scaleBy, 0.8);
+        }
+
+        function resetZoom() {
+            svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+        }
+
+        async function loadData() {
+    const searchName = document.getElementById('search').value.trim();
+    const relationType = document.getElementById('relationType').value;
+    const depth = parseInt(document.getElementById('relationDepth').value);
+
+    let apiUrl;
+    if (searchName) {
+        apiUrl = `http://127.0.0.1:8000/api/v1/people/relationships/${encodeURIComponent(searchName)}`;
+    } else {
+        apiUrl = 'http://127.0.0.1:8000/api/v1/people/graph';
+    }
+
+    // 添加查询参数
+    const params = new URLSearchParams({
+        relation_type: relationType,
+        depth: depth
+    });
+    apiUrl += `?${params}`;
+
+    try {
+        const response = await fetch(apiUrl);
+        const { nodes, links } = await response.json();
+        updateVisualization(nodes, links);
+    } catch (error) {
+        console.error('数据加载失败:', error);
+    }
+}
+        // // 加载数据
+        // async function loadData() {
+        //     const searchName = document.getElementById('search').value;
+        //     const relationType = document.getElementById('relationType').value;
+
+        //     const apiUrl = searchName
+        //         ? `http://127.0.0.1:8000/api/v1/people/relationships/${encodeURIComponent(searchName)}`
+        //         : 'http://127.0.0.1:8000/api/v1/people/graph';
+
+        //     try {
+        //         const response = await fetch(apiUrl);
+        //         const { nodes, links } = await response.json();
+
+        //         const filteredLinks = relationType === 'all'
+        //             ? links
+        //             : links.filter(d => d.type === relationType);
+
+        //         updateVisualization(nodes, filteredLinks);
+        //     } catch (error) {
+        //         console.error('数据加载失败:', error);
+        //     }
+        // }
+
+        // 更新可视化
+        function updateVisualization(nodes, links) {
+            console.log(nodes, links);
+            const zoomLayer = svg.select(".zoom-layer");
+
+            // 清除旧元素
+            zoomLayer.selectAll("*").remove();
+
+            // 创建力导向图
+            simulation = d3.forceSimulation(nodes)
+                .force("link", d3.forceLink(links).id(d => d.name).distance(120))
+                .force("charge", d3.forceManyBody().strength(-400))
+                .force("center", d3.forceCenter(width/2, height/2))
+                .force("collide", d3.forceCollide(35));
+
+            // 绘制连线
+            const link = zoomLayer.selectAll(".link")
+                .data(links)
+                .enter().append("line")
+                .attr("class", "link")
+                .attr("marker-end", "url(#arrow)")
+                .text(d => d.type)
+                .on("mouseover", showLinkTooltip)
+                .on("mouseout", hideTooltip);
+            //绘制关系值文本
+            const linkText = zoomLayer.selectAll(".link-text")
+                .data(links)
+                .enter().append("text")
+                .attr("class", "link-text")
+                .text(d => d.type) // 显示label字段
+                .style("font-size", "16px")
+                .style("fill", "#e91e63"); // 使用醒目颜色
+
+            // 绘制节点
+            const node = zoomLayer.selectAll(".node")
+                .data(nodes)
+                .enter().append("circle")
+                .attr("class", "node")
+                .attr("r", 25)
+                .call(drag(simulation))
+                .on("click", nodeClick)
+                .on("mouseover", showNodeTooltip)
+                .on("mouseout", hideTooltip);
+
+            // 添加文字标签
+            zoomLayer.selectAll(".node-text")
+                .data(nodes)
+                .enter().append("text")
+                .attr("class", "node-text")
+                .text(d => d.name)
+                .attr("dx", -45)
+                .attr("dy", -3);
+
+            // 更新位置
+            simulation.on("tick", () => {
+                link.attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                linkText.attr("x", d => (d.source.x + d.target.x) / 2)
+                    .attr("y", d => (d.source.y + d.target.y) / 2)
+                    // .attr("transform", d => {
+                    //     const angle = Math.atan2(d.target.y - d.source.y, d.target.x - d.source.x);
+                    //     return `rotate(${angle * 180 / Math.PI},${(d.source.x+d.target.x)/2},${(d.source.y+d.target.y)/2})`;
+                    // });
+
+                node.attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+
+                svg.selectAll(".node-text")
+                    .attr("x", d => d.x + 25)
+                    .attr("y", d => d.y + 5);
+            });
+
+        }
+
+        // 事件处理函数
+        function showNodeTooltip(event, d) {
+            tooltip.transition().duration(200).style("opacity", 0.9);
+            tooltip.html(`姓名：${d.name}<br>属性：${JSON.stringify(d.properties)}`)
+                .style("left", (event.pageX -50) + "px")
+                .style("top", (event.pageY ) + "px");
+        }
+
+        function showLinkTooltip(event, d) {
+            tooltip.transition().duration(200).style("opacity", 0.9);
+            tooltip.html(`关系类型：${d.type}<br>标签：${d.label}`)
+                .style("left", (event.pageX ) + "px")
+                .style("top", (event.pageY) + "px");
+        }
+
+        function hideTooltip() {
+            tooltip.transition().duration(200).style("opacity", 0);
+        }
+
+        function nodeClick(event, d) {
+            document.getElementById('search').value = d.name;
+            loadData();
+        }
+
+        // 拖拽处理（兼容缩放）
+        function drag(simulation) {
+            function dragstarted(event) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                event.subject.fx = transform.invertX(event.x);
+                event.subject.fy = transform.invertY(event.y);
+            }
+
+            function dragged(event) {
+                event.subject.fx = transform.invertX(event.x);
+                event.subject.fy = transform.invertY(event.y);
+            }
+
+            function dragended(event) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+
+            return d3.drag()
+                .on("start", dragstarted)
+                .on("drag", dragged)
+                .on("end", dragended);
+        }
+
+        // 初始化
+        initSVG();
+        loadData();
+
+        // 窗口大小变化处理
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight - 120;
+            svg.attr("width", width)
+                .attr("height", height);
+            simulation.force("center", d3.forceCenter(width/2, height/2));
+            simulation.restart();
+        });
+    </script>
+</body>
+</html>
